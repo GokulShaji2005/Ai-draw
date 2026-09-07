@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AIRINK — Hand Gesture Air Drawing</title>
+<style>
+  :root{
+    --bg:        #05070b;
+    --bg-2:      #0a0e16;
+    --line:      #1c2532;
+    --cyan:      #23e6d8;
+    --magenta:   #ff2f6e;
+    --violet:    #8a5bff;
+    --ink:       #e7eef7;
+    --ink-dim:   #7c8797;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html, body {
+    margin:0; padding:0; height:100%; width:100%;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    overflow:hidden;
+  }
+
+  #stage {
+    position:relative;
+    width:100vw; height:100vh;
+    background:
+      radial-gradient(ellipse at 50% 0%, rgba(35,230,216,0.06), transparent 55%),
+      repeating-linear-gradient(0deg, rgba(255,255,255,0.025) 0px, rgba(255,255,255,0.025) 1px, transparent 1px, transparent 40px),
+      repeating-linear-gradient(90deg, rgba(255,255,255,0.025) 0px, rgba(255,255,255,0.025) 1px, transparent 1px, transparent 40px),
+      var(--bg);
+  }
+
+  video { display:none; }
+
+  #drawCanvas, #fxCanvas {
+    position:absolute; top:0; left:0;
+    width:100%; height:100%;
+    display:block;
+  }
+  #fxCanvas { pointer-events:none; }
+
+  /* ---------- start overlay ---------- */
+  #startOverlay {
+    position:absolute; inset:0;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap: 22px;
+    background: radial-gradient(ellipse at 50% 40%, rgba(35,230,216,0.09), transparent 60%), var(--bg);
+    z-index: 40;
+    text-align:center;
+    padding: 24px;
+  }
+  #startOverlay .mark {
+    font-family: var(--mono);
+    letter-spacing: 0.4em;
+    font-size: 12px;
+    color: var(--cyan);
+  }
+  #startOverlay h1 {
+    font-size: clamp(32px, 6vw, 58px);
+    margin: 0;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    background: linear-gradient(100deg, var(--ink) 30%, var(--cyan) 70%, var(--magenta));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  #startOverlay p.sub {
+    max-width: 480px;
+    color: var(--ink-dim);
+    font-size: 15px;
+    line-height: 1.6;
+    margin: 0;
+  }
+  #startBtn {
+    margin-top: 8px;
+    background: var(--ink);
+    color: #05070b;
+    border: none;
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 14px;
+    letter-spacing: 0.06em;
+    padding: 15px 34px;
+    cursor: pointer;
+    transition: transform .15s ease, box-shadow .15s ease;
+    box-shadow: 0 0 0 1px var(--cyan);
+  }
+  #startBtn:hover { transform: translateY(-2px); box-shadow: 0 6px 24px rgba(35,230,216,0.35), 0 0 0 1px var(--cyan); }
+  #startBtn:active { transform: translateY(0); }
+
+  #startError {
+    color: var(--magenta);
+    font-family: var(--mono);
+    font-size: 13px;
+    max-width: 480px;
+    display:none;
+  }
+
+  .glyphrow { display:flex; gap:22px; color: var(--ink-dim); font-family: var(--mono); font-size: 12px; margin-top:6px; }
+  .glyphrow span b { color: var(--ink); }
+
+  /* ---------- HUD ---------- */
+  #hud {
+    position:absolute; z-index: 20;
+    font-family: var(--mono);
+  }
+
+  #topbar {
+    top:0; left:0; right:0;
+    display:flex; align-items:center; justify-content:space-between;
+    padding: 18px 22px;
+    pointer-events:none;
+  }
+  #topbar .brand {
+    pointer-events:auto;
+    display:flex; align-items:baseline; gap:10px;
+  }
+  #topbar .brand .dot { width:8px; height:8px; background:var(--cyan); box-shadow:0 0 10px var(--cyan); border-radius:1px; }
+  #topbar .brand .name { font-weight:700; letter-spacing:0.12em; font-size:14px; color:var(--ink); }
+  #topbar .brand .tag { font-size:11px; color:var(--ink-dim); letter-spacing:0.08em; }
+
+  #controls {
+    pointer-events:auto;
+    display:flex; gap:8px;
+  }
+  .ctrlBtn {
+    background: rgba(10,14,22,0.7);
+    border: 1px solid var(--line);
+    color: var(--ink-dim);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    padding: 9px 13px;
+    cursor:pointer;
+    display:flex; align-items:center; gap:7px;
+    transition: border-color .15s, color .15s;
+  }
+  .ctrlBtn:hover { color: var(--ink); border-color: var(--cyan); }
+  .ctrlBtn.active { color: var(--bg); background: var(--cyan); border-color: var(--cyan); }
+  .swatch { width:11px; height:11px; border:1px solid rgba(255,255,255,0.3); display:inline-block; }
+
+  #colorRow { display:flex; gap:6px; align-items:center; background: rgba(10,14,22,0.7); border:1px solid var(--line); padding:6px 8px; }
+  .colorDot {
+    width:16px; height:16px; border-radius:50%; cursor:pointer; border:2px solid transparent;
+  }
+  .colorDot.selected { border-color: var(--ink); transform: scale(1.15); }
+
+  /* bottom-left gesture readout */
+  #gestureHud {
+    left: 22px; bottom: 22px;
+    width: 250px;
+    background: rgba(8,11,17,0.72);
+    border: 1px solid var(--line);
+    padding: 14px 16px;
+    pointer-events:none;
+  }
+  #gestureHud .row { display:flex; justify-content:space-between; font-size:11px; color:var(--ink-dim); margin-bottom:8px; letter-spacing:0.05em;}
+  #gestureHud .row:last-child{margin-bottom:0;}
+  #gestureHud .val { color: var(--ink); font-weight:600; }
+  #modeChip {
+    display:inline-block; padding:2px 8px; font-size:11px; letter-spacing:0.06em;
+    border:1px solid currentColor;
+  }
+  #handDot { width:6px; height:6px; border-radius:50%; display:inline-block; margin-right:6px; background: var(--ink-dim); }
+  #handDot.on { background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+
+  /* bottom-right mini legend */
+  #legendHud {
+    right: 22px; bottom: 22px;
+    background: rgba(8,11,17,0.72);
+    border: 1px solid var(--line);
+    padding: 12px 15px;
+    pointer-events:none;
+    font-size: 11px;
+    color: var(--ink-dim);
+    line-height: 1.9;
+  }
+  #legendHud b { color: var(--ink); }
+
+  #objCount {
+    top: 70px; right: 22px;
+    background: rgba(8,11,17,0.72);
+    border: 1px solid var(--line);
+    padding: 8px 12px;
+    font-size: 11px;
+    color: var(--ink-dim);
+    pointer-events:none;
+  }
+  #objCount b { color: var(--cyan); }
+
+  #toast {
+    top: 70px; left: 50%; transform: translateX(-50%);
+    background: rgba(8,11,17,0.85);
+    border: 1px solid var(--cyan);
+    color: var(--ink);
+    padding: 9px 18px;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    opacity: 0;
+    transition: opacity .25s ease;
+    pointer-events:none;
+  }
+  #toast.show { opacity: 1; }
+
+  @media (max-width: 720px) {
+    #legendHud { display:none; }
+    #gestureHud { width: 190px; }
+    #topbar .tag { display:none; }
+  }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <video id="video" playsinline></video>
+  <canvas id="drawCanvas"></canvas>
+  <canvas id="fxCanvas"></canvas>
+
+  <div id="hud">
+    <div id="topbar">
+      <div class="brand">
+        <span class="dot"></span>
+        <span class="name">AIRINK</span>
+        <span class="tag">/// gesture canvas</span>
+      </div>
+      <div id="controls">
+        <div id="colorRow">
+          <div class="colorDot selected" style="background:#23e6d8" data-color="#23e6d8"></div>
+          <div class="colorDot" style="background:#ff2f6e" data-color="#ff2f6e"></div>
+          <div class="colorDot" style="background:#8a5bff" data-color="#8a5bff"></div>
+          <div class="colorDot" style="background:#ffd166" data-color="#ffd166"></div>
+          <div class="colorDot" style="background:#e7eef7" data-color="#e7eef7"></div>
+        </div>
+        <button class="ctrlBtn" id="btnMesh">☖ SKELETON</button>
+        <button class="ctrlBtn" id="btnSave">⬇ SAVE PNG</button>
+        <button class="ctrlBtn" id="btnClear">✕ CLEAR</button>
+      </div>
+    </div>
+
+    <div id="objCount">OBJECTS <b id="objCountVal">0</b></div>
+    <div id="toast"></div>
+
+    <div id="gestureHud">
+      <div class="row"><span><span id="handDot"></span>HAND</span><span class="val" id="handVal">searching…</span></div>
+      <div class="row"><span>MODE</span><span class="val"><span id="modeChip" style="color:var(--ink-dim)">IDLE</span></span></div>
+      <div class="row"><span>SELECTED</span><span class="val" id="selVal">none</span></div>
+    </div>
+
+    <div id="legendHud">
+      ☝️ index up &nbsp;→&nbsp; <b>draw</b><br/>
+      🤏 pinch on object &nbsp;→&nbsp; <b>grab / move</b><br/>
+      ✋ open palm &nbsp;→&nbsp; <b>idle</b><br/>
+      ✊ fist 1.5s &nbsp;→&nbsp; <b>delete selected</b>
+    </div>
+  </div>
+
+  <div id="startOverlay">
+    <div class="mark">HAND GESTURE AIR CANVAS</div>
+    <h1>Draw in the air.<br/>Grab it. Move it.</h1>
+    <p class="sub">AIRINK watches your webcam, reads your hand, and turns your index finger into a glowing pen. Pinch to pick up what you drew and move it anywhere.</p>
+    <button id="startBtn">▶ ENABLE CAMERA &amp; START</button>
+    <div class="glyphrow">
+      <span>☝️ <b>draw</b></span>
+      <span>🤏 <b>grab</b></span>
+      <span>✋ <b>idle</b></span>
+      <span>✊ <b>delete</b></span>
+    </div>
+    <div id="startError"></div>
+  </div>
+</div>
+
+<!-- MediaPipe Hands (loaded from jsdelivr CDN) -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---------------------------------------------------------------------
+  // DOM
+  // ---------------------------------------------------------------------
+  const video       = document.getElementById('video');
+  const drawCanvas  = document.getElementById('drawCanvas');
+  const fxCanvas    = document.getElementById('fxCanvas');
+  const dctx        = drawCanvas.getContext('2d');
+  const fctx        = fxCanvas.getContext('2d');
+
+  const startOverlay = document.getElementById('startOverlay');
+  const startBtn      = document.getElementById('startBtn');
+  const startError     = document.getElementById('startError');
+
+  const handVal   = document.getElementById('handVal');
+  const handDot   = document.getElementById('handDot');
+  const modeChip  = document.getElementById('modeChip');
+  const selVal    = document.getElementById('selVal');
+  const objCountVal = document.getElementById('objCountVal');
+  const toastEl   = document.getElementById('toast');
+
+  const btnMesh  = document.getElementById('btnMesh');
+  const btnSave  = document.getElementById('btnSave');
+  const btnClear = document.getElementById('btnClear');
+  const colorDots = document.querySelectorAll('.colorDot');
+
+  // ---------------------------------------------------------------------
+  // State
+  // ---------------------------------------------------------------------
+  let W = window.innerWidth, H = window.innerHeight;
+  let currentColor = '#23e6d8';
+  let showSkeleton = false;
+
+  const MODE = { IDLE:'IDLE', DRAW:'DRAW', GRAB:'GRAB', FIST:'FIST' };
+  let mode = MODE.IDLE;
+
+  // drawings = array of objects: {id, strokes:[[{x,y}...]], color, born}
+  let drawings = [];
+  let nextId = 1;
+
+  let activeStroke = null;   // stroke currently being drawn (array of points)
+  let activeObject = null;   // object currently receiving activeStroke
+  let lastDrawEnd  = 0;      // timestamp when draw mode last ended
+
+  let selectedObj  = null;
+  let grabOffset   = {x:0,y:0};
+  let wasPinching  = false;
+
+  let fistStart = null;      // timestamp fist gesture began
+  const FIST_HOLD_MS = 1400;
+
+  let particles = [];
+  let prevCursor = null;     // for speed-based particle spawning
+  let cursorNow  = null;     // {x,y,active}
+
+  // ---------------------------------------------------------------------
+  // Canvas sizing
+  // ---------------------------------------------------------------------
+  function resize(){
+    W = window.innerWidth; H = window.innerHeight;
+    [drawCanvas, fxCanvas].forEach(c => {
+      c.width = W; c.height = H;
+    });
+    redrawAll();
+  }
+  window.addEventListener('resize', resize);
+
+  // ---------------------------------------------------------------------
+  // Toast helper
+  // ---------------------------------------------------------------------
+  let toastTimer = null;
+  function toast(msg){
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(()=> toastEl.classList.remove('show'), 1400);
+  }
+
+  // ---------------------------------------------------------------------
+  // Geometry / gesture helpers
+  // ---------------------------------------------------------------------
+  function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+
+  // Landmark indices we use
+  const L = {
+    WRIST:0,
+    THUMB_TIP:4, THUMB_IP:3,
+    INDEX_MCP:5, INDEX_PIP:6, INDEX_TIP:8,
+    MIDDLE_MCP:9, MIDDLE_TIP:12,
+    RING_MCP:13, RING_TIP:16,
+    PINKY_MCP:17, PINKY_TIP:20
+  };
+
+  function toPixel(lm){
+    // mirror horizontally so movement feels natural, like a mirror
+    return { x: (1 - lm.x) * W, y: lm.y * H };
+  }
+
+  function analyzeHand(landmarksPx, handScale){
+    const tip = i => landmarksPx[i];
+
+    function extended(tipIdx, mcpIdx){
+      const wrist = tip(L.WRIST);
+      return dist(tip(tipIdx), wrist) > dist(tip(mcpIdx), wrist) * 1.25;
+    }
+
+    const indexExt  = extended(L.INDEX_TIP, L.INDEX_MCP);
+    const middleExt = extended(L.MIDDLE_TIP, L.MIDDLE_MCP);
+    const ringExt   = extended(L.RING_TIP, L.RING_MCP);
+    const pinkyExt  = extended(L.PINKY_TIP, L.PINKY_MCP);
+
+    const pinchDist = dist(tip(L.THUMB_TIP), tip(L.INDEX_TIP)) / handScale;
+    const pinching = pinchDist < 0.42;
+
+    const fist = !indexExt && !middleExt && !ringExt && !pinkyExt && !pinching;
+    const openPalm = indexExt && middleExt && ringExt && pinkyExt;
+    const drawPose = indexExt && !middleExt && !ringExt && !pinkyExt && !pinching;
+
+    return { indexExt, middleExt, ringExt, pinkyExt, pinching, fist, openPalm, drawPose };
+  }
+
+  // ---------------------------------------------------------------------
+  // Drawing objects
+  // ---------------------------------------------------------------------
+  function boundsOf(obj){
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    obj.strokes.forEach(s => s.forEach(p => {
+      if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x;
+      if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
+    }));
+    if(minX===Infinity) return null;
+    const pad = 26;
+    return { x:minX-pad, y:minY-pad, w:(maxX-minX)+pad*2, h:(maxY-minY)+pad*2, cx:(minX+maxX)/2, cy:(minY+maxY)/2 };
+  }
+
+  function hitTest(x,y){
+    // topmost (last drawn) first
+    for(let i = drawings.length-1; i>=0; i--){
+      const b = boundsOf(drawings[i]);
+      if(!b) continue;
+      if(x>=b.x && x<=b.x+b.w && y>=b.y && y<=b.y+b.h) return drawings[i];
+    }
+    return null;
+  }
+
+  function startNewStrokeSession(pt){
+    const now = performance.now();
+    if(activeObject && (now - lastDrawEnd) < 1300){
+      // continue existing object with a fresh stroke
+      activeStroke = [pt];
+      activeObject.strokes.push(activeStroke);
+    } else {
+      activeObject = { id: nextId++, strokes: [[pt]], color: currentColor, born: now };
+      activeStroke = activeObject.strokes[0];
+      drawings.push(activeObject);
+    }
+  }
+
+  function endStrokeSession(){
+    lastDrawEnd = performance.now();
+    activeStroke = null;
+  }
+
+  // ---------------------------------------------------------------------
+  // Particles
+  // ---------------------------------------------------------------------
+  function spawnParticles(x,y,color,n){
+    for(let i=0;i<n;i++){
+      const ang = Math.random()*Math.PI*2;
+      const spd = 0.6 + Math.random()*2.2;
+      particles.push({
+        x, y,
+        vx: Math.cos(ang)*spd, vy: Math.sin(ang)*spd,
+        life: 1, decay: 0.02 + Math.random()*0.03,
+        r: 1 + Math.random()*2.2,
+        color
+      });
+    }
+  }
+
+  function updateParticles(){
+    particles = particles.filter(p => p.life > 0);
+    particles.forEach(p=>{
+      p.x += p.vx; p.y += p.vy;
+      p.vx *= 0.96; p.vy *= 0.96;
+      p.life -= p.decay;
+    });
+  }
+
+  function drawParticles(ctx){
+    particles.forEach(p=>{
+      ctx.save();
+      ctx.globalAlpha = Math.max(p.life,0);
+      ctx.fillStyle = p.color;
+      ctx.shadowColor = p.color;
+      ctx.shadowBlur = 8;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Rendering
+  // ---------------------------------------------------------------------
+  function strokeGlow(ctx, pts, color, selected){
+    if(pts.length < 2) {
+      if(pts.length === 1){
+        ctx.save();
+        ctx.fillStyle = color;
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 16;
+        ctx.beginPath();
+        ctx.arc(pts[0].x, pts[0].y, 3.2, 0, Math.PI*2);
+        ctx.fill();
+        ctx.restore();
+      }
+      return;
+    }
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+
+    // outer glow pass
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.35;
+    ctx.lineWidth = selected ? 13 : 9;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = selected ? 30 : 18;
+    tracePath(ctx, pts);
+    ctx.stroke();
+
+    // core bright pass
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 2.6;
+    ctx.shadowBlur = 6;
+    ctx.strokeStyle = '#ffffff';
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = 0.55;
+    tracePath(ctx, pts);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function tracePath(ctx, pts){
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for(let i=1;i<pts.length;i++){
+      const p0 = pts[i-1], p1 = pts[i];
+      const mx = (p0.x+p1.x)/2, my = (p0.y+p1.y)/2;
+      ctx.quadraticCurveTo(p0.x, p0.y, mx, my);
+    }
+    ctx.lineTo(pts[pts.length-1].x, pts[pts.length-1].y);
+  }
+
+  function redrawAll(){
+    dctx.clearRect(0,0,W,H);
+    drawings.forEach(obj=>{
+      const isSel = obj === selectedObj;
+      obj.strokes.forEach(s => strokeGlow(dctx, s, obj.color, isSel));
+      if(isSel){
+        const b = boundsOf(obj);
+        if(b){
+          dctx.save();
+          dctx.strokeStyle = 'rgba(231,238,247,0.55)';
+          dctx.setLineDash([6,6]);
+          dctx.lineWidth = 1.2;
+          dctx.strokeRect(b.x, b.y, b.w, b.h);
+          dctx.restore();
+        }
+      }
+    });
+    objCountVal.textContent = drawings.length;
+  }
+
+  function drawCursor(landmarksPx, info){
+    if(!landmarksPx) return;
+    const idx = landmarksPx[L.INDEX_TIP];
+    const thb = landmarksPx[L.THUMB_TIP];
+    const midX = (idx.x+thb.x)/2, midY = (idx.y+thb.y)/2;
+
+    fctx.save();
+    if(info.pinching){
+      fctx.strokeStyle = selectedObj ? '#23e6d8' : 'rgba(231,238,247,0.5)';
+      fctx.lineWidth = 2;
+      fctx.beginPath();
+      fctx.arc(midX, midY, 14, 0, Math.PI*2);
+      fctx.stroke();
+      fctx.beginPath();
+      fctx.moveTo(thb.x,thb.y); fctx.lineTo(idx.x,idx.y);
+      fctx.strokeStyle = 'rgba(138,91,255,0.7)';
+      fctx.stroke();
+    } else if(info.drawPose){
+      fctx.fillStyle = currentColor;
+      fctx.shadowColor = currentColor;
+      fctx.shadowBlur = 14;
+      fctx.beginPath();
+      fctx.arc(idx.x, idx.y, 6, 0, Math.PI*2);
+      fctx.fill();
+    } else if(info.fist){
+      const prog = fistStart ? Math.min(1,(performance.now()-fistStart)/FIST_HOLD_MS) : 0;
+      fctx.strokeStyle = '#ff2f6e';
+      fctx.lineWidth = 3;
+      fctx.beginPath();
+      fctx.arc(landmarksPx[L.WRIST].x, landmarksPx[L.WRIST].y - 40, 16, -Math.PI/2, -Math.PI/2 + prog*Math.PI*2);
+      fctx.stroke();
+    } else {
+      fctx.fillStyle = 'rgba(231,238,247,0.5)';
+      fctx.beginPath();
+      fctx.arc(idx.x, idx.y, 4, 0, Math.PI*2);
+      fctx.fill();
+    }
+    fctx.restore();
+  }
+
+  function drawSkeleton(landmarksPx){
+    const PAIRS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[0,9],[9,10],[10,11],[11,12],
+                   [0,13],[13,14],[14,15],[15,16],[0,17],[17,18],[18,19],[19,20],[5,9],[9,13],[13,17]];
+    fctx.save();
+    fctx.strokeStyle = 'rgba(35,230,216,0.5)';
+    fctx.lineWidth = 1.4;
+    PAIRS.forEach(([a,b])=>{
+      fctx.beginPath();
+      fctx.moveTo(landmarksPx[a].x, landmarksPx[a].y);
+      fctx.lineTo(landmarksPx[b].x, landmarksPx[b].y);
+      fctx.stroke();
+    });
+    fctx.fillStyle = 'rgba(231,238,247,0.8)';
+    landmarksPx.forEach(p=>{
+      fctx.beginPath();
+      fctx.arc(p.x,p.y,2.2,0,Math.PI*2);
+      fctx.fill();
+    });
+    fctx.restore();
+  }
+
+  // ---------------------------------------------------------------------
+  // Main per-frame hand logic
+  // ---------------------------------------------------------------------
+  function setMode(next){
+    if(mode !== next){
+      mode = next;
+      modeChip.textContent = mode;
+      const colors = { IDLE:'var(--ink-dim)', DRAW:'var(--cyan)', GRAB:'var(--violet)', FIST:'var(--magenta)' };
+      modeChip.style.color = colors[mode] || 'var(--ink-dim)';
+    }
+  }
+
+  function onResults(results){
+    fctx.clearRect(0,0,W,H);
+
+    const hands = results.multiHandLandmarks;
+    if(!hands || hands.length === 0){
+      handVal.textContent = 'searching…';
+      handDot.classList.remove('on');
+      setMode(MODE.IDLE);
+      if(activeStroke) endStrokeSession();
+      if(selectedObj){ selectedObj = null; selVal.textContent = 'none'; redrawAll(); }
+      fistStart = null;
+      wasPinching = false;
+      return;
+    }
+
+    handVal.textContent = 'tracking';
+    handDot.classList.add('on');
+
+    const raw = hands[0];
+    const px = raw.map(toPixel);
+    const handScale = dist(px[L.WRIST], px[L.MIDDLE_MCP]) || 1;
+    const info = analyzeHand(px, handScale);
+
+    if(showSkeleton) drawSkeleton(px);
+    drawCursor(px, info);
+
+    const idxTip = px[L.INDEX_TIP];
+    const thbTip = px[L.THUMB_TIP];
+    const pinchPt = { x:(idxTip.x+thbTip.x)/2, y:(idxTip.y+thbTip.y)/2 };
+
+    // --- FIST: hold to delete selected object ---
+    if(info.fist){
+      setMode(MODE.FIST);
+      if(fistStart === null) fistStart = performance.now();
+      if(selectedObj && (performance.now()-fistStart) > FIST_HOLD_MS){
+        drawings = drawings.filter(o => o !== selectedObj);
+        toast('Object deleted');
+        selectedObj = null;
+        selVal.textContent = 'none';
+        fistStart = null;
+        redrawAll();
+      }
+      if(activeStroke) endStrokeSession();
+      wasPinching = false;
+      return;
+    } else {
+      fistStart = null;
+    }
+
+    // --- PINCH: grab / move ---
+    if(info.pinching){
+      setMode(MODE.GRAB);
+      if(activeStroke) endStrokeSession();
+
+      if(!wasPinching){
+        // rising edge: try to select
+        const hit = hitTest(pinchPt.x, pinchPt.y);
+        if(hit){
+          selectedObj = hit;
+          // move to top (drawn last / on top)
+          drawings = drawings.filter(o=>o!==hit);
+          drawings.push(hit);
+          grabOffset = { x: pinchPt.x, y: pinchPt.y };
+          selVal.textContent = '#' + hit.id;
+          toast('Grabbed drawing #' + hit.id);
+        }
+      } else if(selectedObj){
+        const dx = pinchPt.x - grabOffset.x;
+        const dy = pinchPt.y - grabOffset.y;
+        selectedObj.strokes.forEach(s => s.forEach(p => { p.x += dx; p.y += dy; }));
+        grabOffset = { x: pinchPt.x, y: pinchPt.y };
+      }
+      wasPinching = true;
+      redrawAll();
+      return;
+    } else {
+      if(wasPinching){
+        // release
+        wasPinching = false;
+      }
+    }
+
+    // --- DRAW ---
+    if(info.drawPose){
+      setMode(MODE.DRAW);
+      if(!activeStroke){
+        startNewStrokeSession({x: idxTip.x, y: idxTip.y});
+      } else {
+        activeStroke.push({x: idxTip.x, y: idxTip.y});
+      }
+      // speed-based sparks
+      if(prevCursor){
+        const spd = dist(prevCursor, idxTip);
+        if(spd > 6){
+          spawnParticles(idxTip.x, idxTip.y, currentColor, Math.min(6, Math.floor(spd/5)));
+        }
+      }
+      prevCursor = {x: idxTip.x, y: idxTip.y};
+      redrawAll();
+      return;
+    } else {
+      if(activeStroke) endStrokeSession();
+      prevCursor = null;
+    }
+
+    // --- IDLE / open palm ---
+    if(info.openPalm){
+      setMode(MODE.IDLE);
+      if(selectedObj){
+        selectedObj = null;
+        selVal.textContent = 'none';
+        redrawAll();
+      }
+    } else {
+      setMode(MODE.IDLE);
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // FX loop (particles run independently of hand-detection frame rate)
+  // ---------------------------------------------------------------------
+  function fxLoop(){
+    updateParticles();
+    // clear only the particle layer region incrementally is complex; instead
+    // we redraw fx canvas each tick by keeping cursor/skeleton drawn in onResults
+    // and layering particles on top without erasing them each hand-frame.
+    drawParticlesLayer();
+    requestAnimationFrame(fxLoop);
+  }
+  function drawParticlesLayer(){
+    // particles are drawn on the fx canvas too, but since onResults clears fx canvas
+    // each hand frame, we draw particles right after via this loop on drawCanvas'
+    // overlay context region -- simplest robust approach: maintain separate layer.
+    pctx.clearRect(0,0,W,H);
+    drawParticles(pctx);
+  }
+
+  // dedicated particle canvas so hand-frame clearing doesn't wipe sparks
+  const particleCanvas = document.createElement('canvas');
+  particleCanvas.style.position='absolute';
+  particleCanvas.style.top=0; particleCanvas.style.left=0;
+  particleCanvas.style.width='100%'; particleCanvas.style.height='100%';
+  particleCanvas.style.pointerEvents='none';
+  document.getElementById('stage').insertBefore(particleCanvas, document.getElementById('hud'));
+  const pctx = particleCanvas.getContext('2d');
+  function syncParticleCanvasSize(){ particleCanvas.width = W; particleCanvas.height = H; }
+  window.addEventListener('resize', syncParticleCanvasSize);
+
+  // ---------------------------------------------------------------------
+  // MediaPipe Hands setup
+  // ---------------------------------------------------------------------
+  let hands, camera;
+
+  function initMediaPipe(){
+    hands = new Hands({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.6
+    });
+    hands.onResults(onResults);
+
+    camera = new Camera(video, {
+      onFrame: async () => { await hands.send({image: video}); },
+      width: 960,
+      height: 720
+    });
+  }
+
+  async function start(){
+    startError.style.display = 'none';
+    startBtn.textContent = 'STARTING…';
+    startBtn.disabled = true;
+    try{
+      resize();
+      syncParticleCanvasSize();
+      initMediaPipe();
+      await camera.start();
+      startOverlay.style.display = 'none';
+      fxLoop();
+      toast('Camera live — show your hand');
+    } catch(err){
+      console.error(err);
+      startBtn.textContent = '▶ ENABLE CAMERA & START';
+      startBtn.disabled = false;
+      startError.style.display = 'block';
+      startError.textContent = 'Could not access the camera (' + (err && err.message ? err.message : err) +
+        '). Allow camera access, and make sure this page is served over https:// or opened as a local file with camera permission granted.';
+    }
+  }
+
+  startBtn.addEventListener('click', start);
+
+  // ---------------------------------------------------------------------
+  // UI controls
+  // ---------------------------------------------------------------------
+  colorDots.forEach(dot=>{
+    dot.addEventListener('click', ()=>{
+      colorDots.forEach(d=>d.classList.remove('selected'));
+      dot.classList.add('selected');
+      currentColor = dot.dataset.color;
+    });
+  });
+
+  btnMesh.addEventListener('click', ()=>{
+    showSkeleton = !showSkeleton;
+    btnMesh.classList.toggle('active', showSkeleton);
+  });
+
+  btnClear.addEventListener('click', ()=>{
+    drawings = [];
+    selectedObj = null;
+    selVal.textContent = 'none';
+    activeObject = null;
+    activeStroke = null;
+    redrawAll();
+    toast('Canvas cleared');
+  });
+
+  btnSave.addEventListener('click', ()=>{
+    const out = document.createElement('canvas');
+    out.width = W; out.height = H;
+    const octx = out.getContext('2d');
+    octx.fillStyle = '#05070b';
+    octx.fillRect(0,0,W,H);
+    octx.drawImage(drawCanvas, 0, 0);
+    const a = document.createElement('a');
+    a.download = 'airink-drawing.png';
+    a.href = out.toDataURL('image/png');
+    a.click();
+    toast('Saved PNG');
+  });
+
+  // initial size
+  resize();
+  syncParticleCanvasSize();
+
+})();
+</script>
+</body>
+</html>
